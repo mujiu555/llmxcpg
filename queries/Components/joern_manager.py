@@ -3,6 +3,7 @@ import json
 import re
 import time
 import subprocess
+import shlex
 from typing import List, Dict, Tuple, Any, Optional
 from cpgqls_client import CPGQLSClient, import_code_query, delete_query
 
@@ -22,18 +23,32 @@ class JoernManager:
     - Extracting paths and other data from Joern
     """
     
-    def __init__(self, port: int, compose_file: str):
+    def __init__(
+        self,
+        port: int,
+        compose_file: Optional[str] = None,
+        runtime_mode: str = "direct",
+        host: str = "localhost",
+        restart_command: Optional[str] = None,
+    ):
         """
         Initialize a Joern Manager for a specific port
         
         Args:
             port: Joern server port number
-            compose_file: Docker compose file path for server recreation
+            compose_file: Docker compose file path for server recreation.
+            runtime_mode: Runtime strategy for Joern management. One of "direct" or "docker".
+            host: Hostname where Joern CPGQL server is reachable.
+            restart_command: Optional shell command used in direct mode to restart Joern.
+                Supports "{port}" template.
         """
         self.port = port
         self.compose_file = compose_file
+        self.runtime_mode = runtime_mode
+        self.host = host
+        self.restart_command = restart_command
         self.server_name = f"joern_server_{port}"
-        self.joern_client = CPGQLSClient(f"localhost:{port}")
+        self.joern_client = CPGQLSClient(f"{host}:{port}")
         
     def check_server_health(self) -> bool:
         """
@@ -60,14 +75,28 @@ class JoernManager:
             time.sleep(2)
             print(f"Starting recreation of server: {self.server_name}")
 
-            # Force recreate the specific service
-            subprocess.run([
-                'docker', 'compose', 
-                '-f', self.compose_file, 
-                'up', '-d', 
-                '--force-recreate', 
-                self.server_name
-            ], check=True)
+            if self.runtime_mode == "docker":
+                if not self.compose_file:
+                    print("Docker mode requested but compose_file is not provided.")
+                    return False
+                # Force recreate the specific service.
+                subprocess.run([
+                    'docker', 'compose',
+                    '-f', self.compose_file,
+                    'up', '-d',
+                    '--force-recreate',
+                    self.server_name
+                ], check=True)
+            elif self.runtime_mode == "direct":
+                if self.restart_command:
+                    rendered_cmd = self.restart_command.format(port=self.port)
+                    cmd_parts = shlex.split(rendered_cmd)
+                    subprocess.run(cmd_parts, check=True)
+                else:
+                    print("Direct mode selected without restart command; checking current server health only.")
+            else:
+                print(f"Unsupported runtime mode: {self.runtime_mode}")
+                return False
 
             # Wait for service to be fully operational
             is_healthy = self._wait_for_server_health()

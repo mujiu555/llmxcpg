@@ -11,6 +11,17 @@ Our approach to slice construction involves the following steps:
 
 ## Scripts
 
+### Running Joern Without Docker
+
+Start one or more Joern servers directly on the host (example with two ports):
+
+```bash
+joern --server --server-host 0.0.0.0 --server-port 16240
+joern --server --server-host 0.0.0.0 --server-port 16241
+```
+
+Then run the scripts with `--joern-runtime direct` (this is now the default).
+
 ### `generate_and_run_queries.py`
 
 This script is responsible for:
@@ -23,7 +34,7 @@ This script is responsible for:
 Here's an example of how to run the `generate_and_run_queries.py` script with the essential arguments:
 
 ```bash
-python generate_and_run_queries.py -d /path/to/your/dataset.json -o /path/to/your/output_dir --llm-model-type vLLM --llm-model-name LLMxCPG-Q --llm-port 9001
+python generate_and_run_queries.py -d /path/to/your/dataset.json -o /path/to/your/output_dir --llm-model-type vLLM --llm-model-name LLMxCPG-Q --llm-port 9001 --joern-runtime direct --joern-host localhost
 ```
 -d /path/to/your/dataset.json: Specifies the path to the JSON file containing the code samples to be processed.
 -o /path/to/your/output_dir: Sets the base directory where the script will create results/ and logs/ subdirectories to store its output.
@@ -33,7 +44,12 @@ python generate_and_run_queries.py -d /path/to/your/dataset.json -o /path/to/you
 
 *Optional Arguments:*
 
-The script offers several optional arguments to customize its behavior.  For example, you can adjust the number of worker threads (-n), specify a different Docker Compose file for Joern (-c), or change the port used for the LLM (--llm-port).  To see a full list of available arguments and their descriptions, run the script with the -h or --help flag:
+The script offers several optional arguments to customize its behavior. For example, you can adjust the number of worker threads (`-n`) or change the port used for the LLM (`--llm-port`).
+
+Joern runtime options:
+- `--joern-runtime direct` (default): connect to already-running Joern server(s), no Docker required.
+- `--joern-runtime docker`: use Docker Compose recreation logic with `-c/--compose-file`.
+- `--joern-restart-command "your_cmd {port}"`: optional command used in direct mode when server recreation is triggered.
 
 ### Generate queries for your custom vulnerability dataset
 
@@ -52,11 +68,13 @@ Usage
 Here's an example of how to run the `construct_slice` script with a non-default dataset path:
 
 ```bash
-python construct_slice -d /path/to/your/queries_output.json -o /path/to/your/output_dir.json
+python construct_slice.py -d /path/to/your/queries_output.json -o /path/to/your/output_dir --joern-runtime direct --joern-host localhost
 ```
 
 -d /path/to/your/queries_output.json: Specifies the path to the JSON file containing the output from the generate_and_run_queries.py script, which includes the identified vulnerability paths.
 -o /path/to/your/output_dir: Sets the base directory where the script will create results/ and logs/ subdirectories to store its output.
-Optional Arguments:
+- `--joern-runtime direct` (default): connect to already-running Joern server(s), no Docker required.
+- `--joern-runtime docker`: use Docker Compose recreation logic with `--docker-compose-file`.
+- `--joern-restart-command "your_cmd {port}"`: optional command used in direct mode when server recreation is triggered.
 
-The script provides several optional arguments to customize its execution. For instance, you can adjust the number of Joern servers to use (-n), or provide a custom Docker Compose file (--docker-compose-file). To see a complete list of available arguments and their descriptions, run the script with the -h or --help flag
+The script provides several optional arguments to customize its execution. For instance, you can adjust the number of Joern servers to use (`-n`). To see a complete list of available arguments and their descriptions, run the script with the `-h` or `--help` flag.

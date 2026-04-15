@@ -28,6 +28,9 @@ class SliceConstructor:
         output_path: str,
         log_path: str,
         docker_compose_path: str,
+        joern_runtime: str,
+        joern_host: str,
+        joern_restart_command: Optional[str],
         thread_id: int = 0,
         server_recreation_interval: int = 5,
         max_paths_per_sample: int = 10,
@@ -41,7 +44,10 @@ class SliceConstructor:
             dataset_slice: Subset of the dataset to process.
             output_path: Path to the output JSON file for results.
             log_path: Path to the log JSON file for errors and progress.
-            docker_compose_path: Path to the Docker Compose YAML file for Joern server management.
+            docker_compose_path: Path to the Docker Compose YAML file (docker mode only).
+            joern_runtime: Joern runtime mode: "direct" or "docker".
+            joern_host: Hostname for Joern CPGQL server.
+            joern_restart_command: Optional restart command for direct mode.
             thread_id: ID of the thread running this analyzer instance. Defaults to 0.
             server_recreation_interval: Number of samples to process before recreating the Joern server.
             max_paths_per_sample: Maximum number of vulnerability paths to process per sample.
@@ -52,6 +58,9 @@ class SliceConstructor:
         self.output_file = output_path
         self.logs_file = log_path
         self.compose_file = docker_compose_path
+        self.joern_runtime = joern_runtime
+        self.joern_host = joern_host
+        self.joern_restart_command = joern_restart_command
         self.thread_id = thread_id
         self.thread_name = f"Thread-{thread_id}"
         self.recreate_interval = server_recreation_interval
@@ -89,7 +98,13 @@ class SliceConstructor:
             asyncio.set_event_loop(loop)
             
             # Initialize JoernManager with the new event loop
-            self.joern_manager = JoernManager(self.port, self.compose_file)
+            self.joern_manager = JoernManager(
+                self.port,
+                compose_file=self.compose_file,
+                runtime_mode=self.joern_runtime,
+                host=self.joern_host,
+                restart_command=self.joern_restart_command,
+            )
             
             # Process the dataset in smaller chunks to avoid memory issues
             for slice_start in range(0, len(self.dataset_slice), self.recreate_interval):
@@ -358,6 +373,9 @@ def run_analyzer_thread(
     output_path: str,
     logs_path: str,
     docker_compose_path: str,
+    joern_runtime: str,
+    joern_host: str,
+    joern_restart_command: Optional[str],
     server_recreation_interval: int,
     max_paths_per_sample: int,
     enhanced_code_dir: str,
@@ -371,7 +389,10 @@ def run_analyzer_thread(
         joern_port: Joern server port number.
         output_path: Path to the output JSON file for results.
         logs_path: Path to the log JSON file for errors and progress.
-        docker_compose_path: Path to the Docker Compose YAML file for Joern server management.
+        docker_compose_path: Path to the Docker Compose YAML file (docker mode only).
+        joern_runtime: Joern runtime mode: "direct" or "docker".
+        joern_host: Hostname for Joern CPGQL server.
+        joern_restart_command: Optional restart command for direct mode.
         server_recreation_interval: Number of samples to process before recreating the Joern server.
         max_paths_per_sample: Maximum number of vulnerability paths to process per sample.
         enhanced_code_dir: Directory to save enhanced code snippets.
@@ -382,6 +403,9 @@ def run_analyzer_thread(
         output_path=output_path,
         log_path=logs_path,
         docker_compose_path=docker_compose_path,
+        joern_runtime=joern_runtime,
+        joern_host=joern_host,
+        joern_restart_command=joern_restart_command,
         thread_id=thread_id,
         server_recreation_interval=server_recreation_interval,
         max_paths_per_sample=max_paths_per_sample,
@@ -455,6 +479,9 @@ def distribute_processing(args):
                 output_file,
                 logs_file,
                 args.docker_compose_file,
+                args.joern_runtime,
+                args.joern_host,
+                args.joern_restart_command,
                 args.server_recreation_interval,
                 args.max_paths_per_sample,
                 thread_enhanced_code_dir,
@@ -515,7 +542,26 @@ def parse_arguments():
     parser.add_argument(
         "--docker-compose-file", type=str,
         default='docker-compose.yml',
-        help="Path to the Docker Compose YAML file for Joern server management"
+        help="Path to the Docker Compose YAML file (used only in docker mode)"
+    )
+
+    parser.add_argument(
+        "--joern-runtime", type=str,
+        choices=["direct", "docker"],
+        default="direct",
+        help="How Joern servers are managed"
+    )
+
+    parser.add_argument(
+        "--joern-host", type=str,
+        default="localhost",
+        help="Hostname where Joern CPGQL server is reachable"
+    )
+
+    parser.add_argument(
+        "--joern-restart-command", type=str,
+        default=None,
+        help="Optional restart command for direct mode (supports {port})"
     )
     
     parser.add_argument(
