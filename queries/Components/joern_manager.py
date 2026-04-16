@@ -63,12 +63,13 @@ class JoernManager:
             # Force recreate the specific service
             subprocess.run(
                 [
-                    "joern",
+                    "nohupjoern",
                     "--server",
                     "--server-host",
                     "0.0.0.0",
                     "--server-port",
                     self.server_name,
+                    "&",
                 ],
                 check=True,
             )
