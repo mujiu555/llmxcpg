@@ -22,16 +22,14 @@ class JoernManager:
     - Extracting paths and other data from Joern
     """
 
-    def __init__(self, port: int, compose_file: str):
+    def __init__(self, port: int):
         """
         Initialize a Joern Manager for a specific port
 
         Args:
             port: Joern server port number
-            compose_file: Docker compose file path for server recreation
         """
         self.port = port
-        self.compose_file = compose_file
         self.server_name = f"{port}"
         self.joern_client = CPGQLSClient(f"localhost:{port}")
 
@@ -60,20 +58,8 @@ class JoernManager:
             time.sleep(2)
             print(f"Starting recreation of server: {self.server_name}")
 
-            # Force recreate the specific service
-            # subprocess.run(
-            #    [
-            #        "nohup",
-            #        "joern",
-            #        "--server",
-            #        "--server-host",
-            #        "localhost",
-            #        "--server-port",
-            #        self.server_name,
-            #        "&",
-            #    ],
-            #    check=True,
-            # )
+            # NOTE: No! F**king! Restart! For! F**king! Joern!
+            # Check connectivity only.
 
             # Wait for service to be fully operational
             is_healthy = self._wait_for_server_health()
