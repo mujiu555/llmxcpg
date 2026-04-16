@@ -61,18 +61,19 @@ class JoernManager:
             print(f"Starting recreation of server: {self.server_name}")
 
             # Force recreate the specific service
-            subprocess.run(
-                [
-                    "nohupjoern",
-                    "--server",
-                    "--server-host",
-                    "0.0.0.0",
-                    "--server-port",
-                    self.server_name,
-                    "&",
-                ],
-                check=True,
-            )
+            # subprocess.run(
+            #    [
+            #        "nohup",
+            #        "joern",
+            #        "--server",
+            #        "--server-host",
+            #        "localhost",
+            #        "--server-port",
+            #        self.server_name,
+            #        "&",
+            #    ],
+            #    check=True,
+            # )
 
             # Wait for service to be fully operational
             is_healthy = self._wait_for_server_health()
