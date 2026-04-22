@@ -155,7 +155,7 @@ class DatasetProcessor:
                         )
 
                     # TODO: Add write data sample logic
-                    f = open(os.path.join("/root/workspace/joern", file_name))
+                    f = open(os.path.join("/root/workspace/joern", file_name), mode="w")
                     f.write(sample["code"])
                     f.close()
                     # Process this sample
