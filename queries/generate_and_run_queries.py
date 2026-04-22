@@ -146,43 +146,6 @@ class DatasetProcessor:
                 self.sample_log_buffer = []  # Reset buffer for new sample
                 active_joern_project = None  # Reset for each sample initially
 
-                # --- Joern Server Recreation Logic ---
-                if i > 0 and i % self.joern_recreate_interval == 0:
-                    # Clean up any project loaded *before* recreating server
-                    if active_joern_project:
-                        try:
-                            self._log_sample_message(
-                                logging.DEBUG,
-                                f"Cleaning up project '{active_joern_project}' before Joern recreate.",
-                            )
-                            self.joern_manager.delete_project(active_joern_project)
-                        except Exception as cleanup_e:
-                            self._log_sample_message(
-                                logging.WARNING,
-                                f"Failed to cleanup Joern project {active_joern_project} before recreate: {cleanup_e}",
-                            )
-                        finally:
-                            active_joern_project = None  # Mark as cleaned up
-
-                    self._log_sample_message(
-                        logging.INFO,
-                        f"Processed {self.joern_recreate_interval} samples. Recreating Joern server.",
-                    )
-
-                    is_healthy = self.joern_manager.recreate_server()
-
-                    if not is_healthy:
-                        self._log_sample_message(
-                            logging.ERROR,
-                            "Joern server unhealthy after recreation. Exiting thread.",
-                        )
-                        self._write_error_logs()
-                        return  # Exit thread
-                    self._log_sample_message(
-                        logging.INFO, "Joern server recreated successfully."
-                    )
-                # --- End Joern Server Recreation Logic ---
-
                 try:
                     self._log_sample_message(logging.INFO, f"Starting processing.")
                     file_name = sample.get("file_name", "").split("/")[-1]
@@ -191,6 +154,10 @@ class DatasetProcessor:
                             "Could not extract a valid file_name from sample['file_name']"
                         )
 
+                    # TODO: Add write data sample logic
+                    f = open(os.path.join("/root/workspace/joern", file_name))
+                    f.write(sample["code"])
+                    f.close()
                     # Process this sample
                     result = self._process_single_sample(sample, file_name)
                     if result:
@@ -275,7 +242,7 @@ class DatasetProcessor:
             self._log_sample_message(
                 logging.DEBUG, f"Loading project '{file_name}' into Joern."
             )
-            stdout = self.joern_manager.load_project(file_name)
+            stdout = self.joern_manager.load_project(file_name)  # FIXME:
 
             # Basic error check based on original code
             if "io.joern.console.ConsoleException" in stdout:

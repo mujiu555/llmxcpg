@@ -128,7 +128,7 @@ class JoernManager:
             Tuple containing query status and output
         """
         print("Query --->", query)
-        result = self.joern_client.execute(query)
+        result = self.joern_client.execute(query)  # FIXME:
         print("result: ", result)
         stdout = result["stdout"]
 
