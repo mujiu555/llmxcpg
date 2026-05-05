@@ -12,6 +12,7 @@ import os
 import json
 from Components.enhancer import analyze_c_code, get_context, save_context
 
+
 def construct_code_snippet():
     """Executes the queries acquired from the 'Generate Queries' step and extract the paths in the following json format:
     [
@@ -19,7 +20,7 @@ def construct_code_snippet():
             "file_name": name of the file,
             "queries": [
                 {
-                    "id": node id, 
+                    "id": node id,
                     "line_number": the line number where this node exists in the source code
                 },
                 ...
@@ -31,11 +32,11 @@ def construct_code_snippet():
     """
 
     # Ensure EnhancedCode directory exists
-    folder_path = 'ReposVulSelfContainedTest'
+    folder_path = "ReposVulSelfContainedTest"
     os.makedirs(folder_path, exist_ok=True)
 
     # Read the extracted paths
-    with open('reposvul_test_paths_10.json', 'r') as f:
+    with open("reposvul_test_paths_10.json", "r") as f:
         dataset = json.load(f)
 
     enhanced_results = []
@@ -47,10 +48,9 @@ def construct_code_snippet():
         if len(paths) == 0:
             continue
 
-
         # Merge paths
         merged_paths_list = merge(paths)
-        print('merged paths list:', merged_paths_list)
+        print("merged paths list:", merged_paths_list)
 
         # Process each merged path
         for merged_path in merged_paths_list:
@@ -60,38 +60,47 @@ def construct_code_snippet():
             blocks = analyze_c_code(source_code)
 
             # Extract line numbers from the path
-            path_line_numbers = list(filter((lambda line: line != None), [node.get('line_number') for node in merged_path]))
+            path_line_numbers = list(
+                filter(
+                    (lambda line: line != None),
+                    [node.get("line_number") for node in merged_path],
+                )
+            )
 
             print("path line numbers", path_line_numbers)
             # Get context lines
             context_lines = get_context(path_line_numbers, blocks)
 
             # Save enhanced context
-            output_file = os.path.join(folder_path, 
-                f"{os.path.basename(item["file_name"])}_enhanced.c")
+            output_file = os.path.join(
+                folder_path, f"{os.path.basename(item['file_name'])}_enhanced.c"
+            )
             enhanced_code = save_context(list(context_lines), source_code, output_file)
 
-            enhanced_results.append({
-                'file_name': item["file_name"],
-                'path_file': output_file,
-                'self_contained_code': enhanced_code,
-                'context_lines': list(context_lines),
-                'cwe': item["cwe"],
-                'label': item["label"]
-            })
+            enhanced_results.append(
+                {
+                    "file_name": item["file_name"],
+                    "path_file": output_file,
+                    "self_contained_code": enhanced_code,
+                    "context_lines": list(context_lines),
+                    "cwe": item["cwe"],
+                    "label": item["label"],
+                }
+            )
 
     # Save enhanced results to a JSON file
-    with open('reposvul_test_self_contained_concise.json', 'w') as f:
+    with open("reposvul_test_self_contained_concise.json", "w") as f:
         json.dump(enhanced_results, f, indent=4)
 
+
 def merge(paths: list[list]) -> list:
-    """ Returns contained code snippets based on each of the received paths.
+    """Returns contained code snippets based on each of the received paths.
     Args:
         paths: The list of flows returned by Joern
     """
     contained_paths = []
 
-    for  path in paths:
+    for path in paths:
         merged_line_numbers = set()
         contained_path = []
         for node in path:
@@ -100,7 +109,7 @@ def merge(paths: list[list]) -> list:
 
             merged_line_numbers.add(node.get("line_number"))
             contained_path.append(node)
-        
+
         contained_paths.append(contained_path)
-    
+
     return contained_paths
