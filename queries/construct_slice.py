@@ -67,7 +67,6 @@ class SliceConstructor:
         self.logger.setLevel(logging.INFO)
 
         # The JoernManager will be initialized in process_dataset
-        self.joern_manager = None
 
     def process_dataset(self):
         """
@@ -140,7 +139,7 @@ class SliceConstructor:
 
             # Run the queries and extract paths
             success, paths = self.joern_manager.run_queries(
-                sample["queries"], sample["code"]
+                sample["llm_queries"], sample['details']["code"]
             )
 
             if not success or not paths:
