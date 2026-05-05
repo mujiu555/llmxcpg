@@ -33,13 +33,13 @@ python generate_and_run_queries.py -d /path/to/your/dataset.json -o /path/to/you
 
 *Optional Arguments:*
 
-The script offers several optional arguments to customize its behavior.  For example, you can adjust the number of worker threads (-n), specify a different Docker Compose file for Joern (-c), or change the port used for the LLM (--llm-port).  To see a full list of available arguments and their descriptions, run the script with the -h or --help flag:
+The script offers several optional arguments to customize its behavior.  For example, you can adjust the number of worker threads (-n), specify the path to the Joern installation (-j), or change the port used for the LLM (--llm-port).  To see a full list of available arguments and their descriptions, run the script with the -h or --help flag:
 
 ### Generate queries for your custom vulnerability dataset
 
 To be able to use our script `generate_and_run_queries.py`, please follow these steps:
 1. Create a json file with the same format as the files at `data/formai_query_generation.json` and `data/primevul_query_generation.json`.
-2. Modify our Dockerfile: create your own `all_source_code.zip` file and modify the Dockerfile such that it uses your file and extracts the files at Joern's installation folder.
+2. Place your source code files in the Joern import path or provide them directly through your dataset configuration. The `Dockerfile` and `docker-compose.yml` files in this directory are provided as references for the original Docker-based setup but are not needed for local execution.
 
 
 ### `construct_slice.py`
@@ -59,4 +59,4 @@ python construct_slice -d /path/to/your/queries_output.json -o /path/to/your/out
 -o /path/to/your/output_dir: Sets the base directory where the script will create results/ and logs/ subdirectories to store its output.
 Optional Arguments:
 
-The script provides several optional arguments to customize its execution. For instance, you can adjust the number of Joern servers to use (-n), or provide a custom Docker Compose file (--docker-compose-file). To see a complete list of available arguments and their descriptions, run the script with the -h or --help flag
+The script provides several optional arguments to customize its execution. For instance, you can adjust the number of Joern servers to use (-n), or provide the path to the Joern installation (-j). To see a complete list of available arguments and their descriptions, run the script with the -h or --help flag

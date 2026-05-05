@@ -62,7 +62,7 @@ class DatasetProcessor:
                  dataset_slice: List[Dict],
                  output_file: str,
                  logs_file: str,
-                 compose_file: str,
+                 joern_path: str,
                  llm_model_type: str,
                  llm_model_name: str,
                  llm_port: int,
@@ -75,7 +75,7 @@ class DatasetProcessor:
             dataset_slice: Subset of the dataset to process.
             output_file: Path to the unique output file for this thread's results.
             logs_file: Path to the file to store detailed logs/errors for this thread.
-            compose_file: Path to the Docker compose file for Joern.
+            joern_path: Path to the joern-cli directory containing the 'joern' binary.
             llm_model_type: Identifier string for the LLM model type (e.g., "DeepSeek").
             llm_model_name: Model identifier passed to the completion API (e.g., local model name).
             llm_port: Port for the LLM service.
@@ -85,7 +85,7 @@ class DatasetProcessor:
         self.dataset_slice = dataset_slice
         self.output_file = output_file
         self.logs_file = logs_file
-        self.compose_file = compose_file
+        self.joern_path = joern_path
         self.joern_recreate_interval = joern_recreate_interval
         self.llm_model_type = llm_model_type
         self.llm_model_name = llm_model_name
@@ -120,7 +120,15 @@ class DatasetProcessor:
         nest_asyncio.apply(loop)
 
         # Initialize components (intentionally after the event loop is setup)
-        self.joern_manager = JoernManager(self.port, self.compose_file)
+        self.joern_manager = JoernManager(self.port, self.joern_path)
+
+        # Ensure the Joern server is running before processing
+        if not self.joern_manager.check_server_health():
+            self._log_sample_message(logging.INFO, "Joern server not running. Starting it...")
+            if not self.joern_manager.recreate_server():
+                self._log_sample_message(logging.ERROR, "Failed to start Joern server. Exiting thread.")
+                self._write_error_logs()
+                return
 
         active_joern_project = None # Track the currently loaded project filename
         self.sample_log_buffer = []  # Ensure log buffer exists for error handling
@@ -374,8 +382,8 @@ def main():
                         help="Path to the input dataset JSON file.")
     parser.add_argument("-o", "--output-base-dir", type=str, required=True,
                         help="Base directory for output files. 'results' and 'logs' subdirectories will be created here.")
-    parser.add_argument("-c", "--compose-file", type=str, default="docker-compose.yml",
-                        help="Path to the Docker Compose file for Joern servers.")
+    parser.add_argument("-j", "--joern-path", type=str, required=True,
+                        help="Path to the joern-cli directory containing the 'joern' binary.")
     parser.add_argument("-n", "--num-workers", type=int, default=1,
                         help="Number of parallel threads/workers (and Joern instances) to use.")
     parser.add_argument("--base-joern-port", type=int, default=16240,
@@ -458,7 +466,7 @@ def main():
             dataset_slice=dataset_slice,
             output_file=output_file,
             logs_file=logs_file,
-            compose_file=args.compose_file,
+            joern_path=args.joern_path,
             llm_model_type=args.llm_model_type,
             llm_model_name=args.llm_model_name,
             llm_port=args.llm_port,

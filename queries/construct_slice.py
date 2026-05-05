@@ -27,7 +27,7 @@ class SliceConstructor:
         dataset_slice: List[Dict],
         output_path: str,
         log_path: str,
-        docker_compose_path: str,
+        joern_path: str,
         thread_id: int = 0,
         server_recreation_interval: int = 5,
         max_paths_per_sample: int = 10,
@@ -35,13 +35,13 @@ class SliceConstructor:
     ):
         """
         Initialize a constructor for a specific port and dataset slice.
-        
+
         Args:
             joern_port: Joern server port number.
             dataset_slice: Subset of the dataset to process.
             output_path: Path to the output JSON file for results.
             log_path: Path to the log JSON file for errors and progress.
-            docker_compose_path: Path to the Docker Compose YAML file for Joern server management.
+            joern_path: Path to the joern-cli directory containing the 'joern' binary.
             thread_id: ID of the thread running this analyzer instance. Defaults to 0.
             server_recreation_interval: Number of samples to process before recreating the Joern server.
             max_paths_per_sample: Maximum number of vulnerability paths to process per sample.
@@ -51,7 +51,7 @@ class SliceConstructor:
         self.dataset_slice = dataset_slice
         self.output_file = output_path
         self.logs_file = log_path
-        self.compose_file = docker_compose_path
+        self.joern_path = joern_path
         self.thread_id = thread_id
         self.thread_name = f"Thread-{thread_id}"
         self.recreate_interval = server_recreation_interval
@@ -89,7 +89,7 @@ class SliceConstructor:
             asyncio.set_event_loop(loop)
             
             # Initialize JoernManager with the new event loop
-            self.joern_manager = JoernManager(self.port, self.compose_file)
+            self.joern_manager = JoernManager(self.port, self.joern_path)
             
             # Process the dataset in smaller chunks to avoid memory issues
             for slice_start in range(0, len(self.dataset_slice), self.recreate_interval):
@@ -105,11 +105,13 @@ class SliceConstructor:
                         self._write_error_logs("Unhealthy Joern server")
                         return
                 
-                # Check server health for the first batch
+                # Check server health for the first batch and start if needed
                 elif not self.joern_manager.check_server_health():
-                    self.logger.error("Initial Joern server health check failed")
-                    self._write_error_logs("Initial health check failed")
-                    return
+                    self.logger.info("Joern server not running. Attempting to start it...")
+                    if not self.joern_manager.recreate_server():
+                        self.logger.error("Initial Joern server health check failed and could not be started")
+                        self._write_error_logs("Initial health check failed")
+                        return
                 
                 # Process each sample in the current slice
                 for sample in self.dataset_slice[slice_start:slice_end]:
@@ -357,21 +359,21 @@ def run_analyzer_thread(
     joern_port: int,
     output_path: str,
     logs_path: str,
-    docker_compose_path: str,
+    joern_path: str,
     server_recreation_interval: int,
     max_paths_per_sample: int,
     enhanced_code_dir: str,
 ):
     """
     Run an analyzer in a separate thread.
-    
+
     Args:
         thread_id: ID of the thread.
         dataset_slice: Subset of the dataset to process.
         joern_port: Joern server port number.
         output_path: Path to the output JSON file for results.
         logs_path: Path to the log JSON file for errors and progress.
-        docker_compose_path: Path to the Docker Compose YAML file for Joern server management.
+        joern_path: Path to the joern-cli directory containing the 'joern' binary.
         server_recreation_interval: Number of samples to process before recreating the Joern server.
         max_paths_per_sample: Maximum number of vulnerability paths to process per sample.
         enhanced_code_dir: Directory to save enhanced code snippets.
@@ -381,7 +383,7 @@ def run_analyzer_thread(
         dataset_slice=dataset_slice,
         output_path=output_path,
         log_path=logs_path,
-        docker_compose_path=docker_compose_path,
+        joern_path=joern_path,
         thread_id=thread_id,
         server_recreation_interval=server_recreation_interval,
         max_paths_per_sample=max_paths_per_sample,
@@ -399,7 +401,9 @@ def distribute_processing(args):
         args: Command-line arguments from argparse.
     """
     logger = logging.getLogger("SliceConstructor-Main")
-    
+
+    joern_path = args.joern_path
+
     # Load full dataset
     try:
         logger.info(f"Loading dataset from {args.dataset_path}")
@@ -454,7 +458,7 @@ def distribute_processing(args):
                 joern_port,
                 output_file,
                 logs_file,
-                args.docker_compose_file,
+                joern_path,
                 args.server_recreation_interval,
                 args.max_paths_per_sample,
                 thread_enhanced_code_dir,
@@ -513,9 +517,9 @@ def parse_arguments():
     )
     
     parser.add_argument(
-        "--docker-compose-file", type=str,
-        default='docker-compose.yml',
-        help="Path to the Docker Compose YAML file for Joern server management"
+        "-j", "--joern-path", type=str,
+        required=True,
+        help="Path to the joern-cli directory containing the 'joern' binary"
     )
     
     parser.add_argument(

@@ -58,11 +58,17 @@ Our finetuned models (i.e., LLMxCPG-Q and LLMxCPG-D) are available on Hugging Fa
 
 ### Prerequisites
 
-* Docker
-
 * Python 3.8+
 
 * [Joern](https://joern.io/) - for CPG generation and querying (tested with v4.0.408)
+
+  Install Joern locally (not in Docker):
+  ```bash
+  curl -L "https://github.com/joernio/joern/releases/latest/download/joern-install.sh" -o joern-install.sh
+  bash joern-install.sh --without-plugins
+  ```
+
+  After installation, note the path to the `joern-cli` directory (typically `$HOME/joern/joern-cli`). This path is required by the scripts. The `Dockerfile` and `docker-compose.yml` in `queries/` are provided as references for the original Docker-based setup but are **not required** for the local execution path.
 
 ### Installation
 
