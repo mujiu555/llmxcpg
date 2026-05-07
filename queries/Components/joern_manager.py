@@ -1,6 +1,7 @@
 import json
 import os
 import subprocess
+import tempfile
 import time
 from enum import Enum
 from typing import List, Dict, Tuple, Any, Optional
@@ -37,6 +38,7 @@ class JoernManager:
         self.server_name = f"joern_server_{port}"
         self.joern_client = CPGQLSClient(f"localhost:{port}")
         self._process: Optional[subprocess.Popen] = None
+        self._stderr_file: Optional[Any] = None
 
     def _get_joern_bin(self) -> str:
         """Get the path to the joern binary within the joern-cli directory."""
@@ -62,17 +64,40 @@ class JoernManager:
         ]
 
         try:
-            # Start Joern server as a subprocess; output goes to /dev/null
-            # since Joern logging is verbose and we only care about health
+            # Capture stderr to a temp file so we can diagnose startup errors
+            self._stderr_file = tempfile.NamedTemporaryFile(
+                mode="w+", prefix=f"joern_{self.port}_", suffix=".log", delete=False
+            )
             self._process = subprocess.Popen(
                 cmd,
                 stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
+                stderr=self._stderr_file,
                 cwd=self.joern_path
             )
+
+            # Give Joern's JVM time to initialize before the first health check.
+            # Without this delay, the first check almost always hits a
+            # ConnectionRefusedError because the server isn't listening yet.
+            print(f"Joern process started (PID {self._process.pid}), "
+                  f"waiting for JVM initialization...")
+            for waited in range(10):
+                time.sleep(1)
+                if self._process.poll() is not None:
+                    self._print_stderr_tail()
+                    print(f"Joern process exited prematurely with code "
+                          f"{self._process.returncode}")
+                    return False
+                # Probe early: if the port is already listening, start
+                # health checks immediately instead of waiting the full 10 s.
+                if waited >= 4 and self.check_server_health():
+                    print(f"Joern server {self.server_name} is ready early "
+                          f"(after ~{waited + 1}s).")
+                    return True
+
             return self._wait_for_server_health()
         except Exception as e:
             print(f"Error starting Joern server on port {self.port}: {e}")
+            self._print_stderr_tail()
             return False
 
     def stop_server(self):
@@ -90,6 +115,27 @@ class JoernManager:
             pass
         finally:
             self._process = None
+            if self._stderr_file is not None:
+                try:
+                    self._stderr_file.close()
+                    os.unlink(self._stderr_file.name)
+                except Exception:
+                    pass
+                self._stderr_file = None
+
+    def _print_stderr_tail(self, lines: int = 30):
+        """Print the last N lines of the Joern stderr log for debugging."""
+        if self._stderr_file is None:
+            return
+        try:
+            self._stderr_file.flush()
+            with open(self._stderr_file.name, "r") as f:
+                content = f.read()
+            if content.strip():
+                tail = "\n".join(content.splitlines()[-lines:])
+                print(f"Joern stderr (last {lines} lines):\n{tail}")
+        except Exception:
+            pass
 
     def check_server_health(self) -> bool:
         """
@@ -101,7 +147,10 @@ class JoernManager:
         try:
             status, _ = self.run_query("val x = 1")
             return status == QueryStatus.SUCCESSFUL
-        except Exception:
+        except Exception as e:
+            if not getattr(self, "_health_failure_logged", False):
+                self._health_failure_logged = True
+                print(f"Joern health check failed ({type(e).__name__}: {e})")
             return False
 
     def recreate_server(self) -> bool:
@@ -130,7 +179,7 @@ class JoernManager:
             print(f"Unexpected error with service {self.server_name}: {e}")
             return False
 
-    def _wait_for_server_health(self, max_wait: int = 180, check_interval: int = 20) -> bool:
+    def _wait_for_server_health(self, max_wait: int = 120, check_interval: int = 5) -> bool:
         """
         Wait for a service to be fully operational
 
@@ -142,26 +191,28 @@ class JoernManager:
             Boolean indicating if service became healthy
         """
         total_waited = 0
+        self._health_failure_logged = False
 
         while total_waited < max_wait:
+            # If Joern process died, don't keep waiting
+            if self._process is not None and self._process.poll() is not None:
+                print(f"Joern process exited with code {self._process.returncode}")
+                self._print_stderr_tail()
+                return False
+
             try:
-                # Run query to check if the Joern server is ready to accept queries
                 if self.check_server_health():
                     print(f"Joern server {self.server_name} is ready to accept requests.")
+                    self._health_failure_logged = False
                     return True
-
-                # Wait before next check
-                print(f"Waiting before next check for server: {self.server_name}")
-
-                time.sleep(check_interval)
-                total_waited += check_interval
-
             except Exception as e:
                 print(f"Error checking health for {self.server_name}: {e}")
-                time.sleep(check_interval)
-                total_waited += check_interval
+
+            time.sleep(check_interval)
+            total_waited += check_interval
 
         print(f"Server {self.server_name} did not become healthy within {max_wait} seconds")
+        self._print_stderr_tail()
         return False
 
     def run_query(self, query: str) -> Tuple[QueryStatus, str]:

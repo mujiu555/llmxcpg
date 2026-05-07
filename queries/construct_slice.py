@@ -85,8 +85,10 @@ class SliceConstructor:
         
         try:
             # Set up a new event loop for this thread
+            import nest_asyncio
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
+            nest_asyncio.apply(loop)
             
             # Initialize JoernManager with the new event loop
             self.joern_manager = JoernManager(self.port, self.joern_path)
