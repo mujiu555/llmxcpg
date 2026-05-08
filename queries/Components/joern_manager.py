@@ -1,5 +1,7 @@
 import json
 import os
+import re
+import shutil
 import subprocess
 import tempfile
 import time
@@ -39,6 +41,7 @@ class JoernManager:
         self.joern_client = CPGQLSClient(f"localhost:{port}")
         self._process: Optional[subprocess.Popen] = None
         self._stderr_file: Optional[Any] = None
+        self._project_dirs: Dict[str, str] = {}
 
     def _get_joern_bin(self) -> str:
         """Get the path to the joern binary within the joern-cli directory."""
@@ -263,26 +266,41 @@ class JoernManager:
         success, paths = self.extract_joern_paths(source_code, queries)
         return success, paths
 
-    def load_project(self, folder_path: str) -> str:
+    def load_project(self, folder_path: str, code_content: Optional[str] = None) -> str:
         """
-        Load a project into Joern
+        Load a project into Joern.
+
+        Writes *code_content* to a temporary directory so that Joern has a real
+        filesystem path to import, then cleans up that directory on delete_project.
 
         Args:
-            folder_path: Path to the folder containing the code to analyze
+            folder_path: The filename to use for the Joern project (e.g. "foo.c").
+            code_content: The source code to write. Required — if omitted the old
+                          behaviour is preserved (the path itself is assumed to exist).
 
         Returns:
             Output from the import operation
         """
-        import_code_qr = import_code_query(folder_path, folder_path)
+        if code_content is not None:
+            project_dir = tempfile.mkdtemp(prefix="joern_proj_")
+            code_file = os.path.join(project_dir, folder_path)
+            with open(code_file, "w", encoding="utf-8") as f:
+                f.write(code_content)
+            self._project_dirs[folder_path] = project_dir
+            import_path = os.path.abspath(project_dir)
+        else:
+            import_path = folder_path
+
+        import_code_qr = import_code_query(import_path, folder_path)
         print("import query: ", import_code_qr)
         status, stdout = self.run_query(import_code_qr)
         print("stdout: ", stdout)
-        print(f"Project loaded from {folder_path}")
+        print(f"Project loaded from {import_path}")
         return stdout
 
     def delete_project(self, project_name: str) -> str:
         """
-        Delete a project from Joern
+        Delete a project from Joern and clean up any leftover directories.
 
         Args:
             project_name: Name of the project to delete
@@ -294,8 +312,58 @@ class JoernManager:
         print("delete query: ", delete_project_query)
         status, stdout = self.run_query(delete_project_query)
         print("stdout: ", stdout)
+
+        # 1. Remove the temp directory we created in load_project.
+        project_dir = self._project_dirs.pop(project_name, None)
+        if project_dir and os.path.isdir(project_dir):
+            try:
+                shutil.rmtree(project_dir, ignore_errors=True)
+                print(f"Removed temp project dir: {project_dir}")
+            except Exception as exc:
+                print(f"Failed to remove temp project dir {project_dir}: {exc}")
+
+        # 2. Joern may leave behind workspace/<project_name> directories
+        #    when its internal delete fails. Parse the error message and
+        #    remove them ourselves.
+        if self._looks_like_delete_failure(stdout):
+            self._cleanup_joern_workspace_dirs(project_name, stdout)
+
         print(f"Project {project_name} deleted")
         return stdout
+
+    @staticmethod
+    def _looks_like_delete_failure(stdout: str) -> bool:
+        """Return True if *stdout* indicates Joern could not fully delete the project."""
+        if not stdout:
+            return False
+        markers = [
+            "Cannot delete", "Could not delete", "Failed to delete",
+            "Unable to remove", "Unable to delete",
+            "ConsoleException",
+        ]
+        return any(m in stdout for m in markers)
+
+    def _cleanup_joern_workspace_dirs(self, project_name: str, stdout: str):
+        """Remove workspace directories Joern failed to delete, guided by the error message."""
+        # Joern typically creates projects under <joern_cwd>/workspace/<name>
+        candidates = [
+            os.path.join(self.joern_path, "workspace", project_name),
+        ]
+
+        # Also try to pull any explicit paths from Joern's stderr/stdout
+        path_pattern = re.compile(r"['\"]?((?:/[^\s'\"]+)|(?:[A-Za-z]:\\[^\s'\"]+))['\"]?")
+        for match in path_pattern.finditer(stdout):
+            p = match.group(1)
+            if os.path.exists(p):
+                candidates.append(p)
+
+        for path in candidates:
+            if os.path.exists(path):
+                try:
+                    shutil.rmtree(path, ignore_errors=True)
+                    print(f"Manually removed Joern workspace dir: {path}")
+                except Exception as exc:
+                    print(f"Failed to remove Joern workspace dir {path}: {exc}")
 
     def extract_joern_paths(self, source_code: str, queries: list) -> Tuple[bool, list]:
         """

@@ -242,7 +242,7 @@ class DatasetProcessor:
 
             # --- Load code into Joern ---
             self._log_sample_message(logging.DEBUG, f"Loading project '{file_name}' into Joern.")
-            stdout = self.joern_manager.load_project(file_name)
+            stdout = self.joern_manager.load_project(file_name, code_content)
 
             # Basic error check based on original code
             if "io.joern.console.ConsoleException" in stdout:
