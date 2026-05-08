@@ -123,13 +123,17 @@ def build_dataset(results_dir: str, dataset_name: str = "LLMxCPG") -> list[dict]
             continue
         seen.add(dedup_key)
 
+        # Resolve CWE: check top-level first, then details (where
+        # generate_and_run_queries.py nests the original sample), then N/A.
+        cwe = entry.get("cwe") or entry.get("details", {}).get("cwe", "") or "N/A"
+
         dataset.append({
             "instruction": INSTRUCTION,
             "input": code.strip(),
             "output": label,
             "file_name": unique_name,
             "dataset": entry.get("dataset") or dataset_name,
-            "cwe": entry.get("cwe") or "N/A",
+            "cwe": cwe,
         })
 
     logging.info(

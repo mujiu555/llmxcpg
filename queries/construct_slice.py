@@ -247,7 +247,7 @@ class SliceConstructor:
                     "file_name": sample.get("file_name", ""),
                     "queries": sample.get("queries") or sample.get("llm_queries", []),
                     "path_idx": path_idx,
-                    "cwe": sample.get("cwe", ""),
+                    "cwe": sample.get("cwe") or sample.get("details", {}).get("cwe", ""),
                     "label": sample.get("label", ""),
                     "original_code": sample.get("original_code", ""),
                     "code": source_code,
