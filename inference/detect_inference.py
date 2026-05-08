@@ -480,31 +480,16 @@ def parse_args():
         "pkco": 0.32,
     }
 
-    # Resolve dataset: if it's a known name use the mapped path, otherwise treat as a direct file path
-    if args.dataset in dataset_files:
-        args.dataset_path = dataset_files[args.dataset]
-    elif os.path.isfile(args.dataset):
-        args.dataset_path = args.dataset
-    else:
-        parser.error(
-            f"Dataset '{args.dataset}' is not a known dataset name and not a valid file path."
-        )
+    args.dataset_path = dataset_files.get(args.dataset, args.dataset)
 
     # Set threshold strategy
-    if args.threshold is not None:
+    if args.threshold is None and not args.find_optimal:
+        args.threshold = default_thresholds.get(args.dataset)
         args.find_optimal = False
-    elif args.find_optimal:
+    elif args.threshold is None and args.find_optimal:
         args.threshold = None
     else:
-        # No explicit threshold and not finding optimal: use default if available, else find optimal
-        if args.dataset in default_thresholds:
-            args.threshold = default_thresholds[args.dataset]
-        else:
-            logger.info(
-                "No default threshold for custom dataset; will find optimal threshold."
-            )
-            args.find_optimal = True
-            args.threshold = None
+        args.find_optimal = False
 
     return args
 
