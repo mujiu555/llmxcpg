@@ -147,7 +147,7 @@ class SliceConstructor:
             file_name = os.path.basename(sample["file_name"])
             
             # Load code into Joern
-            load_output = self.joern_manager.load_project(file_name)
+            load_output = self.joern_manager.load_project(file_name, sample["code"])
             if "ConsoleException" in load_output:
                 self.logger.error(f"Failed to load project: {load_output}")
                 raise ValueError(f"Failed to load project: {load_output}")

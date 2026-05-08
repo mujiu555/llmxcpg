@@ -52,11 +52,12 @@ Usage
 Here's an example of how to run the `construct_slice` script with a non-default dataset path:
 
 ```bash
-python construct_slice -d /path/to/your/queries_output.json -o /path/to/your/output_dir.json
+python construct_slice.py -d /path/to/your/queries_output.json -o /path/to/your/output_dir -j /path/to/joern-cli
 ```
 
 -d /path/to/your/queries_output.json: Specifies the path to the JSON file containing the output from the generate_and_run_queries.py script, which includes the identified vulnerability paths.
 -o /path/to/your/output_dir: Sets the base directory where the script will create results/ and logs/ subdirectories to store its output.
+-j /path/to/joern-cli: Specifies the path to the joern-cli directory containing the 'joern' binary.
 Optional Arguments:
 
 The script provides several optional arguments to customize its execution. For instance, you can adjust the number of Joern servers to use (-n), or provide the path to the Joern installation (-j). To see a complete list of available arguments and their descriptions, run the script with the -h or --help flag

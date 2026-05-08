@@ -67,8 +67,8 @@ def construct_code_snippet():
             context_lines = get_context(path_line_numbers, blocks)
 
             # Save enhanced context
-            output_file = os.path.join(folder_path, 
-                f"{os.path.basename(item["file_name"])}_enhanced.c")
+            output_file = os.path.join(folder_path,
+                f"{os.path.basename(item['file_name'])}_enhanced.c")
             enhanced_code = save_context(list(context_lines), source_code, output_file)
 
             enhanced_results.append({
