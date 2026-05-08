@@ -134,34 +134,48 @@ class SliceConstructor:
     def _process_sample(self, sample: Dict):
         """
         Process a single code sample through the full pipeline.
-        
+
         Args:
             sample: The code sample to process.
         """
         self.current_sample = sample["file_name"]
-        
+
         try:
             self.logger.info(f"Processing sample: {sample['file_name']}")
-            
+
             # Extract filename from path
             file_name = os.path.basename(sample["file_name"])
-            
+
+            # Resolve code and queries from the sample.
+            # The output of generate_and_run_queries.py nests 'code' inside
+            # 'details' and stores queries under 'llm_queries'; direct-input
+            # datasets use top-level 'code' and 'queries'.
+            code = sample.get("code") or sample.get("details", {}).get("code", "")
+            queries = sample.get("queries") or sample.get("llm_queries", [])
+
+            if not code:
+                self.logger.error("No source code found in sample")
+                return
+            if not queries:
+                self.logger.error("No queries found in sample")
+                return
+
             # Load code into Joern
-            load_output = self.joern_manager.load_project(file_name, sample["code"])
+            load_output = self.joern_manager.load_project(file_name, code)
             if "ConsoleException" in load_output:
                 self.logger.error(f"Failed to load project: {load_output}")
                 raise ValueError(f"Failed to load project: {load_output}")
 
             # Get the number of data flows
-            num_flows = self.joern_manager.get_number_of_flows(sample["queries"])
+            num_flows = self.joern_manager.get_number_of_flows(queries)
             self.logger.info(f"Number of flows detected: {num_flows}")
-            
+
             if num_flows == 0:
                 self.logger.info("No flows detected, skipping sample")
                 return
 
             # Run the queries and extract paths
-            success, paths = self.joern_manager.run_queries(sample["queries"], sample["code"])
+            success, paths = self.joern_manager.run_queries(queries, code)
             
             if not success or not paths:
                 self.logger.warning("Failed to extract paths or no paths found")
@@ -202,7 +216,7 @@ class SliceConstructor:
             List of processed results including enhanced code snippets.
         """
         results = []
-        source_code = sample.get("code", "")
+        source_code = sample.get("code") or sample.get("details", {}).get("code", "")
         if not source_code:
             self.logger.error("Missing source code in sample")
             return results
@@ -244,7 +258,7 @@ class SliceConstructor:
                     "transformation_idx": sample.get("transformation_idx", 0),
                     "original_file_name": sample.get("original_file_name", ""),
                     "file_name": sample.get("file_name", ""),
-                    "queries": sample.get("queries", []),
+                    "queries": sample.get("queries") or sample.get("llm_queries", []),
                     "path_idx": path_idx,
                     "cwe": sample.get("cwe", ""),
                     "label": sample.get("label", ""),
