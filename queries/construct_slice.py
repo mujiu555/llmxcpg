@@ -7,7 +7,7 @@ import threading
 import time
 import asyncio
 from pathlib import Path
-from typing import List, Dict, Any, Optional, Tuple
+from typing import List, Dict, Optional
 
 from Components.joern_manager import JoernManager
 from Components.enhancer import analyze_c_code, get_context, save_context
@@ -28,13 +28,12 @@ class SliceConstructor:
         output_path: str,
         log_path: str,
         joern_path: str,
-        thread_id: int = 0,
         server_recreation_interval: int = 5,
         max_paths_per_sample: int = 10,
         enhanced_code_output_dir: Optional[str] = None,
     ):
         """
-        Initialize a constructor for a specific port and dataset slice.
+        Initialize a slice constructor for a specific Joern port and dataset slice.
 
         Args:
             joern_port: Joern server port number.
@@ -42,7 +41,6 @@ class SliceConstructor:
             output_path: Path to the output JSON file for results.
             log_path: Path to the log JSON file for errors and progress.
             joern_path: Path to the joern-cli directory containing the 'joern' binary.
-            thread_id: ID of the thread running this analyzer instance. Defaults to 0.
             server_recreation_interval: Number of samples to process before recreating the Joern server.
             max_paths_per_sample: Maximum number of vulnerability paths to process per sample.
             enhanced_code_output_dir: Optional directory to save enhanced code snippets.
@@ -52,16 +50,14 @@ class SliceConstructor:
         self.output_file = output_path
         self.logs_file = log_path
         self.joern_path = joern_path
-        self.thread_id = thread_id
-        self.thread_name = f"Thread-{thread_id}"
         self.recreate_interval = server_recreation_interval
         self.max_paths = max_paths_per_sample
         self.current_sample = ""
-        
+
         # Create output directories
         Path(os.path.dirname(output_path)).mkdir(parents=True, exist_ok=True)
         Path(os.path.dirname(log_path)).mkdir(parents=True, exist_ok=True)
-        
+
         # Create enhanced code directory
         if enhanced_code_output_dir:
             self.enhanced_dir = enhanced_code_output_dir
@@ -69,10 +65,6 @@ class SliceConstructor:
             self.enhanced_dir = os.path.join(os.path.dirname(output_path), "enhanced_code")
         Path(self.enhanced_dir).mkdir(parents=True, exist_ok=True)
 
-        # Configure thread-specific logger
-        self.logger = logging.getLogger(f"SliceConstruct-{self.thread_id}")
-        self.logger.setLevel(logging.INFO)
-        
         # The JoernManager will be initialized in process_dataset
         self.joern_manager = None
 
@@ -80,47 +72,42 @@ class SliceConstructor:
         """
         Process the assigned slice of the dataset.
         """
-        threading.current_thread().name = f"Analyzer-{self.thread_id}"
+        self.logger = logging.getLogger("SliceConstructor")
         self.logger.info(f"Starting processing of {len(self.dataset_slice)} samples")
-        
+
         try:
             # Set up a new event loop for this thread
             import nest_asyncio
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
             nest_asyncio.apply(loop)
-            
+
             # Initialize JoernManager with the new event loop
             self.joern_manager = JoernManager(self.port, self.joern_path)
-            
-            # Process the dataset in smaller chunks to avoid memory issues
-            for slice_start in range(0, len(self.dataset_slice), self.recreate_interval):
-                slice_end = min(slice_start + self.recreate_interval, len(self.dataset_slice))
-                
-                # Recreate the Joern server if this isn't the first iteration
-                if slice_start > 0:
-                    self.logger.info(f"Recreating Joern server after processing {self.recreate_interval} samples")
+
+            # Ensure the Joern server is running before processing
+            if not self.joern_manager.check_server_health():
+                self.logger.info("Joern server not running. Starting it...")
+                if not self.joern_manager.recreate_server():
+                    self.logger.error("Failed to start Joern server. Exiting.")
+                    self._write_error_logs("Failed to start Joern server")
+                    return
+
+            for i, sample in enumerate(self.dataset_slice):
+                # Joern Server Recreation Logic
+                if i > 0 and i % self.recreate_interval == 0:
+                    self.logger.info(f"Processed {self.recreate_interval} samples. Recreating Joern server.")
                     is_healthy = self.joern_manager.recreate_server()
-                    
                     if not is_healthy:
-                        self.logger.error("Exiting thread due to unhealthy Joern server")
-                        self._write_error_logs("Unhealthy Joern server")
+                        self.logger.error("Joern server unhealthy after recreation. Exiting.")
+                        self._write_error_logs("Unhealthy Joern server after recreation")
                         return
-                
-                # Check server health for the first batch and start if needed
-                elif not self.joern_manager.check_server_health():
-                    self.logger.info("Joern server not running. Attempting to start it...")
-                    if not self.joern_manager.recreate_server():
-                        self.logger.error("Initial Joern server health check failed and could not be started")
-                        self._write_error_logs("Initial health check failed")
-                        return
-                
-                # Process each sample in the current slice
-                for sample in self.dataset_slice[slice_start:slice_end]:
-                    self._process_sample(sample)
-            
+                    self.logger.info("Joern server recreated successfully.")
+
+                self._process_sample(sample)
+
             self.logger.info("Completed processing all assigned samples")
-        
+
         except Exception as e:
             self.logger.exception(f"Fatal error in process_dataset: {e}")
             self._write_error_logs(f"Fatal error: {str(e)}")
@@ -279,221 +266,52 @@ class SliceConstructor:
         return results
 
     def _write_processed_sample(self, processed_sample: Dict):
-        """
-        Write a processed sample to the output file.
-        
-        Args:
-            processed_sample: The processed sample data.
-        """
+        """Appends a processed sample to the output JSON file."""
         try:
-            # Use file lock to prevent race conditions when multiple threads write to the same file
-            lock_file = f"{self.output_file}.lock"
-            with open(lock_file, 'w') as f:
-                f.write(f"Lock created by thread {self.thread_id}")
-            
             try:
-                # If file exists, read existing data, otherwise start with an empty list
-                try:
-                    with open(self.output_file, 'r') as f:
-                        existing_data = json.load(f)
-                except (FileNotFoundError, json.JSONDecodeError):
+                with open(self.output_file, 'r', encoding='utf-8') as f:
+                    existing_data = json.load(f)
+                if not isinstance(existing_data, list):
+                    self.logger.warning(f"Output file {self.output_file} does not contain a JSON list. Overwriting.")
                     existing_data = []
-                
-                # Append new sample
-                existing_data.append(processed_sample)
-                
-                # Write back to file (atomic write)
-                temp_file = f"{self.output_file}.tmp"
-                with open(temp_file, 'w') as f:
-                    json.dump(existing_data, f, indent=4)
-                
-                # Rename for atomic replacement
-                os.replace(temp_file, self.output_file)
-                
-                self.logger.info(f"Wrote processed sample to {self.output_file}")
-                
-            finally:
-                # Remove lock file
-                if os.path.exists(lock_file):
-                    os.remove(lock_file)
-                
+            except (FileNotFoundError, json.JSONDecodeError):
+                existing_data = []
+
+            existing_data.append(processed_sample)
+
+            with open(self.output_file, 'w', encoding='utf-8') as f:
+                json.dump(existing_data, f, indent=4)
+
+            self.logger.info(f"Appended result to {self.output_file}")
+
         except Exception as e:
             self.logger.exception(f"Error writing processed sample: {e}")
             self._write_error_logs(f"Error writing processed sample: {str(e)}")
 
     def _write_error_logs(self, error_message: str):
-        """
-        Write error logs to the logs file.
-        
-        Args:
-            error_message: Brief description of the error.
-        """
+        """Appends an error log entry to the logs JSON file."""
         try:
-            # Use file lock to prevent race conditions
-            lock_file = f"{self.logs_file}.lock"
-            with open(lock_file, 'w') as f:
-                f.write(f"Lock created by thread {self.thread_id}")
-            
             try:
-                # If file exists, read existing data, otherwise start with an empty list
-                try:
-                    with open(self.logs_file, 'r') as f:
-                        existing_data = json.load(f)
-                except (FileNotFoundError, json.JSONDecodeError):
+                with open(self.logs_file, 'r', encoding='utf-8') as f:
+                    existing_data = json.load(f)
+                if not isinstance(existing_data, list):
                     existing_data = []
-                
-                # Append new log entry
-                existing_data.append({
-                    "sample": self.current_sample,
-                    "thread_id": self.thread_id,
-                    "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
-                    "error": error_message
-                })
-                
-                # Write back to file (atomic write)
-                temp_file = f"{self.logs_file}.tmp"
-                with open(temp_file, 'w') as f:
-                    json.dump(existing_data, f, indent=4)
-                
-                # Rename for atomic replacement
-                os.replace(temp_file, self.logs_file)
-                
-                self.logger.info(f"Wrote logs to file {self.logs_file}")
-                
-            finally:
-                # Remove lock file
-                if os.path.exists(lock_file):
-                    os.remove(lock_file)
-            
+            except (FileNotFoundError, json.JSONDecodeError):
+                existing_data = []
+
+            existing_data.append({
+                "sample": self.current_sample,
+                "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
+                "error": error_message
+            })
+
+            with open(self.logs_file, 'w', encoding='utf-8') as f:
+                json.dump(existing_data, f, indent=4)
+
+            self.logger.info(f"Appended error log to {self.logs_file}")
+
         except Exception as e:
             self.logger.error(f"Error writing logs: {e}")
-
-
-def run_analyzer_thread(
-    thread_id: int,
-    dataset_slice: List[Dict],
-    joern_port: int,
-    output_path: str,
-    logs_path: str,
-    joern_path: str,
-    server_recreation_interval: int,
-    max_paths_per_sample: int,
-    enhanced_code_dir: str,
-):
-    """
-    Run an analyzer in a separate thread.
-
-    Args:
-        thread_id: ID of the thread.
-        dataset_slice: Subset of the dataset to process.
-        joern_port: Joern server port number.
-        output_path: Path to the output JSON file for results.
-        logs_path: Path to the log JSON file for errors and progress.
-        joern_path: Path to the joern-cli directory containing the 'joern' binary.
-        server_recreation_interval: Number of samples to process before recreating the Joern server.
-        max_paths_per_sample: Maximum number of vulnerability paths to process per sample.
-        enhanced_code_dir: Directory to save enhanced code snippets.
-    """
-    analyzer = SliceConstructor(
-        joern_port=joern_port,
-        dataset_slice=dataset_slice,
-        output_path=output_path,
-        log_path=logs_path,
-        joern_path=joern_path,
-        thread_id=thread_id,
-        server_recreation_interval=server_recreation_interval,
-        max_paths_per_sample=max_paths_per_sample,
-        enhanced_code_output_dir=enhanced_code_dir,
-    )
-    
-    analyzer.process_dataset()
-
-
-def distribute_processing(args):
-    """
-    Distribute the dataset processing across multiple threads.
-    
-    Args:
-        args: Command-line arguments from argparse.
-    """
-    logger = logging.getLogger("SliceConstructor-Main")
-
-    joern_path = args.joern_path
-
-    # Load full dataset
-    try:
-        logger.info(f"Loading dataset from {args.dataset_path}")
-        with open(args.dataset_path, 'r') as f:
-            dataset = json.load(f)
-        logger.info(f"Loaded dataset with {len(dataset)} samples")
-    except FileNotFoundError:
-        logger.error(f"Dataset file not found at {args.dataset_path}")
-        return
-    except json.JSONDecodeError:
-        logger.error(f"Could not decode JSON from {args.dataset_path}")
-        return
-    
-    # Divide dataset into slices for parallel processing
-    slice_size = len(dataset) // args.num_joern_servers
-    threads = []
-    
-    logger.info(f"Starting {args.num_joern_servers} analyzer threads")
-    
-    # Create and start a thread for each port
-    for i in range(args.num_joern_servers):
-        # Calculate start and end indices for this thread's slice
-        start_idx = i * slice_size
-        end_idx = start_idx + slice_size if i < args.num_joern_servers - 1 else len(dataset)
-        
-        # Create the slice for this thread
-        dataset_slice = dataset[start_idx:end_idx]
-        
-        # Create output and logs file paths
-        output_file = os.path.join(args.output_dir, "results", f'thread_{i+1}_results.json')
-        logs_file = os.path.join(args.output_dir, "logs", f'thread_{i+1}_logs.json')
-        
-        # Create directories if they don't exist
-        Path(os.path.join(args.output_dir, "results")).mkdir(parents=True, exist_ok=True)
-        Path(os.path.join(args.output_dir, "logs")).mkdir(parents=True, exist_ok=True)
-        
-        # Determine enhanced code output directory for this thread
-        thread_enhanced_code_dir = args.enhanced_code_dir if args.enhanced_code_dir else os.path.join(args.output_dir, f'thread_{i+1}_enhanced_code')
-        Path(thread_enhanced_code_dir).mkdir(parents=True, exist_ok=True)
-        
-        # Joern port for this thread
-        joern_port = args.base_joern_port + i
-        
-        logger.info(f"Configuring thread {i+1} with port {joern_port}, processing {len(dataset_slice)} samples")
-        
-        # Create and start thread
-        thread = threading.Thread(
-            target=run_analyzer_thread,
-            args=(
-                i+1,
-                dataset_slice,
-                joern_port,
-                output_file,
-                logs_file,
-                joern_path,
-                args.server_recreation_interval,
-                args.max_paths_per_sample,
-                thread_enhanced_code_dir,
-            ),
-            name=f"Analyzer-{i+1}"
-        )
-        thread.start()
-        threads.append(thread)
-        
-        # Brief delay to prevent all threads starting simultaneously
-        time.sleep(1)
-    
-    # Wait for all threads to complete
-    for i, thread in enumerate(threads):
-        logger.info(f"Waiting for thread {i+1} to complete")
-        thread.join()
-        logger.info(f"Thread {i+1} completed")
-    
-    logger.info("All threads completed processing")
 
 
 def parse_arguments():
@@ -521,9 +339,9 @@ def parse_arguments():
     )
     
     parser.add_argument(
-        "-n", "--num-joern-servers", type=int,
-        default=5,
-        help="Number of Joern servers to spin up (and threads to create)"
+        "-n", "--num-workers", type=int,
+        default=1,
+        help="Number of parallel threads/workers (and Joern instances) to use."
     )
     
     parser.add_argument(
@@ -587,21 +405,91 @@ def setup_logging(log_level):
 
 def main():
     """
-    Main entry point for the vulnerability analyzer.
+    Main function to parse arguments, set up, and run dataset processing.
     """
     args = parse_arguments()
     setup_logging(args.log_level)
-    
-    logger = logging.getLogger("Construct_Slice")
-    logger.info("Starting Slice Construction")
-    logger.info(f"Configuration: {vars(args)}")
-    
-    try:
-        distribute_processing(args)
-        logger.info("Slice construction completed successfully")
-    except Exception as e:
-        logger.exception(f"Fatal error in main: {e}")
+
+    # --- Argument Validation ---
+    if not os.path.isfile(args.dataset_path):
+        logging.error(f"Dataset file not found: {args.dataset_path}")
         sys.exit(1)
+    if args.num_workers <= 0:
+        logging.error("--num-workers must be positive.")
+        sys.exit(1)
+
+    # --- Setup Directories ---
+    results_dir = os.path.join(args.output_dir, "results")
+    logs_dir = os.path.join(args.output_dir, "logs")
+    os.makedirs(results_dir, exist_ok=True)
+    os.makedirs(logs_dir, exist_ok=True)
+    logging.info(f"Outputs will be saved under: {args.output_dir}")
+    logging.info(f"Number of workers: {args.num_workers}")
+
+    # --- Load and Slice Dataset ---
+    try:
+        with open(args.dataset_path, 'r', encoding='utf-8') as f:
+            dataset = json.load(f)
+        if not isinstance(dataset, list):
+            raise TypeError("Dataset file does not contain a valid JSON list.")
+        logging.info(f"Loaded dataset with {len(dataset)} samples from {args.dataset_path}")
+    except (json.JSONDecodeError, TypeError, FileNotFoundError, OSError) as e:
+        logging.error(f"Failed to load or parse dataset file {args.dataset_path}: {e}")
+        sys.exit(1)
+
+    if not dataset:
+        logging.warning("Dataset is empty. Exiting.")
+        sys.exit(0)
+
+    # Divide dataset into slices for each worker
+    slice_size = len(dataset) // args.num_workers
+    remainder = len(dataset) % args.num_workers
+    threads = []
+    start_idx = 0
+
+    # --- Create and Start Threads ---
+    logging.info("Starting worker threads...")
+    for i in range(args.num_workers):
+        current_slice_size = slice_size + (1 if i < remainder else 0)
+        end_idx = start_idx + current_slice_size
+
+        if start_idx >= len(dataset):
+            logging.warning(f"Worker {i+1} has no data assigned, reducing effective worker count.")
+            continue
+
+        dataset_slice = dataset[start_idx:end_idx]
+
+        output_file = os.path.join(results_dir, f'thread_{i+1}_results.json')
+        logs_file = os.path.join(logs_dir, f'thread_{i+1}_logs.json')
+        port = args.base_joern_port + i
+
+        # Enhanced code output directory for this worker
+        worker_enhanced_dir = args.enhanced_code_dir if args.enhanced_code_dir else os.path.join(args.output_dir, f'thread_{i+1}_enhanced_code')
+        Path(worker_enhanced_dir).mkdir(parents=True, exist_ok=True)
+
+        processor = SliceConstructor(
+            joern_port=port,
+            dataset_slice=dataset_slice,
+            output_path=output_file,
+            log_path=logs_file,
+            joern_path=args.joern_path,
+            server_recreation_interval=args.server_recreation_interval,
+            max_paths_per_sample=args.max_paths_per_sample,
+            enhanced_code_output_dir=worker_enhanced_dir,
+        )
+
+        thread = threading.Thread(target=processor.process_dataset, name=f"Worker-{i+1}")
+        thread.start()
+        threads.append(thread)
+        logging.info(f"Started Worker-{i+1} (Port {port}) processing {len(dataset_slice)} samples. Output: {output_file}, Logs: {logs_file}")
+
+        start_idx = end_idx
+
+    # --- Wait for Threads to Complete ---
+    for thread in threads:
+        thread.join()
+
+    logging.info("All worker threads have completed processing.")
 
 
 if __name__ == "__main__":
