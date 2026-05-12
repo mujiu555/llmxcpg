@@ -3,6 +3,7 @@ import json
 import logging
 import os
 from collections import defaultdict, Counter
+from datetime import datetime
 from typing import List, Tuple, Dict, Any
 import random
 
@@ -245,7 +246,15 @@ class InferenceEngine:
                     prediction_counts[pred_int] += 1
                     confidence_stats.append(confidence)
 
+                    processed_at = datetime.now().isoformat()
+                    logger.info(
+                        "[%s] Processing file: %s",
+                        processed_at,
+                        item["file_name"],
+                    )
+
                     result = {
+                        "processed_at": processed_at,
                         "code": item["text"]
                         .split("\n## Input:\n")[-1]
                         .replace("\n## Response:\n", ""),
@@ -350,6 +359,46 @@ class MetricsCalculator:
         return best_threshold, best_metrics, threshold_results
 
 
+class FileLevelAggregator:
+    """Aggregates inference results by file to determine file-level safety.
+
+    If all predictions for a given file are benign (0), the file is SAFE.
+    If any prediction is vulnerable (1), the file is VULNERABLE.
+    """
+
+    @staticmethod
+    def aggregate(results: List[Dict]) -> Dict[str, Any]:
+        file_groups: Dict[str, List[Dict]] = defaultdict(list)
+        for r in results:
+            file_groups[r["file_name"]].append(r)
+
+        file_results: Dict[str, Any] = {}
+        for fname, items in file_groups.items():
+            benign_count = sum(1 for item in items if item["prediction"] == 0)
+            vuln_count = sum(1 for item in items if item["prediction"] == 1)
+            all_benign = vuln_count == 0
+            file_results[fname] = {
+                "file_name": fname,
+                "total_items": len(items),
+                "benign_count": benign_count,
+                "vulnerable_count": vuln_count,
+                "file_level": "SAFE" if all_benign else "VULNERABLE",
+            }
+
+        total_files = len(file_results)
+        safe_files = sum(
+            1 for v in file_results.values() if v["file_level"] == "SAFE"
+        )
+        vuln_files = total_files - safe_files
+        logger.info(
+            "File-level aggregation: %d total files, %d SAFE, %d VULNERABLE",
+            total_files,
+            safe_files,
+            vuln_files,
+        )
+        return file_results
+
+
 class ResultsHandler:
     """Handles saving and logging results."""
 
@@ -406,6 +455,43 @@ class ResultsHandler:
                     f.write(
                         f"{result['threshold']:.3f}\t{result['accuracy']:.4f}\t{result['precision']:.4f}\t{result['recall']:.4f}\t{result['f1']:.4f}\t{cm['tp']}\t{cm['fp']}\t{cm['fn']}\t{cm['tn']}\n"
                     )
+
+    @staticmethod
+    def save_file_level_results(
+        file_results: Dict[str, Any],
+        base_model: str,
+        dataset_path: str,
+        output_dir: str,
+    ):
+        model_name = base_model.split("/")[-1]
+        dataset_name = dataset_path.split("/")[-1].replace(".json", "")
+        base_filename = f"{model_name}_{dataset_name}"
+        os.makedirs(output_dir, exist_ok=True)
+
+        file_level_file = os.path.join(
+            output_dir, f"{base_filename}_file_level.tsv"
+        )
+        with open(file_level_file, "w") as f:
+            f.write(
+                "file_name\ttotal_items\tbenign_count\tvulnerable_count\tfile_level\n"
+            )
+            for fname, info in sorted(file_results.items()):
+                f.write(
+                    f"{fname}\t{info['total_items']}\t{info['benign_count']}\t{info['vulnerable_count']}\t{info['file_level']}\n"
+                )
+        logger.info(
+            "File-level results saved to %s (%d files)",
+            file_level_file,
+            len(file_results),
+        )
+
+        # Also save as JSON for richer consumption
+        file_level_json = os.path.join(
+            output_dir, f"{base_filename}_file_level.json"
+        )
+        with open(file_level_json, "w") as f:
+            json.dump(file_results, f, indent=2, ensure_ascii=False)
+        logger.info("File-level JSON saved to %s", file_level_json)
 
     @staticmethod
     def log_results(model: str, results: dict, dataset: str):
@@ -523,6 +609,15 @@ def main():
         )
         results = InferenceEngine.run_inference(
             model, grouped_inputs, config.BATCH_SIZE
+        )
+
+        # Aggregate file-level safety
+        file_level_results = FileLevelAggregator.aggregate(results)
+        ResultsHandler.save_file_level_results(
+            file_level_results,
+            args.base_model,
+            args.dataset_path,
+            args.output_dir,
         )
 
         # Find optimal threshold or use specified threshold

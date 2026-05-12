@@ -132,8 +132,10 @@ def build_dataset(results_dir: str, dataset_name: str = "LLMxCPG") -> list[dict]
             "input": code.strip(),
             "output": label,
             "file_name": unique_name,
+            "original_file_name": entry.get("file_name", "unknown.c"),
             "dataset": entry.get("dataset") or dataset_name,
             "cwe": cwe,
+            "details": entry,
         })
 
     logging.info(
