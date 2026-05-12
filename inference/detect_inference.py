@@ -364,39 +364,88 @@ class FileLevelAggregator:
 
     If all predictions for a given file are benign (0), the file is SAFE.
     If any prediction is vulnerable (1), the file is VULNERABLE.
+
+    Ground truth is derived from per-sample labels via the same rule:
+    all labels 0 -> truly SAFE, any label 1 -> truly VULNERABLE.
     """
 
     @staticmethod
-    def aggregate(results: List[Dict]) -> Dict[str, Any]:
+    def aggregate(results: List[Dict], threshold: float) -> Dict[str, Any]:
         file_groups: Dict[str, List[Dict]] = defaultdict(list)
         for r in results:
             file_groups[r["file_name"]].append(r)
 
         file_results: Dict[str, Any] = {}
         for fname, items in file_groups.items():
-            benign_count = sum(1 for item in items if item["prediction"] == 0)
-            vuln_count = sum(1 for item in items if item["prediction"] == 1)
-            all_benign = vuln_count == 0
+            pred_benign = sum(
+                1 for item in items
+                if item["probability_vulnerable"] < threshold
+            )
+            pred_vuln = len(items) - pred_benign
+            true_benign = sum(1 for item in items if item["label"] == 0)
+            true_vuln = len(items) - true_benign
+
+            pred_safe = pred_vuln == 0
+            true_safe = true_vuln == 0
+
+            pred_label = "SAFE" if pred_safe else "VULNERABLE"
+            true_label = "SAFE" if true_safe else "VULNERABLE"
+            correct = pred_label == true_label
+
             file_results[fname] = {
                 "file_name": fname,
                 "total_items": len(items),
-                "benign_count": benign_count,
-                "vulnerable_count": vuln_count,
-                "file_level": "SAFE" if all_benign else "VULNERABLE",
+                "benign_count": pred_benign,
+                "vulnerable_count": pred_vuln,
+                "true_benign_count": true_benign,
+                "true_vulnerable_count": true_vuln,
+                "prediction": pred_label,
+                "ground_truth": true_label,
+                "correct": correct,
             }
 
         total_files = len(file_results)
         safe_files = sum(
-            1 for v in file_results.values() if v["file_level"] == "SAFE"
+            1 for v in file_results.values() if v["prediction"] == "SAFE"
         )
         vuln_files = total_files - safe_files
+        correct_files = sum(1 for v in file_results.values() if v["correct"])
         logger.info(
-            "File-level aggregation: %d total files, %d SAFE, %d VULNERABLE",
+            "File-level aggregation: %d total files, %d SAFE, %d VULNERABLE, %d correct",
             total_files,
             safe_files,
             vuln_files,
+            correct_files,
         )
         return file_results
+
+    @staticmethod
+    def compute_file_metrics(
+        file_results: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        y_true = [1 if v["ground_truth"] == "VULNERABLE" else 0
+                  for v in file_results.values()]
+        y_pred = [1 if v["prediction"] == "VULNERABLE" else 0
+                  for v in file_results.values()]
+
+        accuracy = accuracy_score(y_true, y_pred)
+        precision, recall, f1, _ = precision_recall_fscore_support(
+            y_true, y_pred, average="binary", zero_division=0
+        )
+
+        tp = sum((p == 1 and t == 1) for p, t in zip(y_pred, y_true))
+        fp = sum((p == 1 and t == 0) for p, t in zip(y_pred, y_true))
+        fn = sum((p == 0 and t == 1) for p, t in zip(y_pred, y_true))
+        tn = sum((p == 0 and t == 0) for p, t in zip(y_pred, y_true))
+
+        return {
+            "accuracy": accuracy,
+            "precision": precision,
+            "recall": recall,
+            "f1": f1,
+            "confusion_matrix": {"tp": tp, "fp": fp, "fn": fn, "tn": tn},
+            "total_files": len(file_results),
+        }
 
 
 class ResultsHandler:
@@ -459,6 +508,7 @@ class ResultsHandler:
     @staticmethod
     def save_file_level_results(
         file_results: Dict[str, Any],
+        file_metrics: Dict[str, Any],
         base_model: str,
         dataset_path: str,
         output_dir: str,
@@ -473,11 +523,16 @@ class ResultsHandler:
         )
         with open(file_level_file, "w") as f:
             f.write(
-                "file_name\ttotal_items\tbenign_count\tvulnerable_count\tfile_level\n"
+                "file_name\ttotal_items\tpred_benign\tpred_vuln\tprediction\t"
+                "true_benign\ttrue_vuln\tground_truth\tcorrect\n"
             )
             for fname, info in sorted(file_results.items()):
                 f.write(
-                    f"{fname}\t{info['total_items']}\t{info['benign_count']}\t{info['vulnerable_count']}\t{info['file_level']}\n"
+                    f"{fname}\t{info['total_items']}\t"
+                    f"{info['benign_count']}\t{info['vulnerable_count']}\t"
+                    f"{info['prediction']}\t"
+                    f"{info['true_benign_count']}\t{info['true_vulnerable_count']}\t"
+                    f"{info['ground_truth']}\t{info['correct']}\n"
                 )
         logger.info(
             "File-level results saved to %s (%d files)",
@@ -492,6 +547,27 @@ class ResultsHandler:
         with open(file_level_json, "w") as f:
             json.dump(file_results, f, indent=2, ensure_ascii=False)
         logger.info("File-level JSON saved to %s", file_level_json)
+
+        # Save file-level metrics
+        file_metrics_file = os.path.join(
+            output_dir, f"{base_filename}_file_metrics.tsv"
+        )
+        cm = file_metrics["confusion_matrix"]
+        with open(file_metrics_file, "w") as f:
+            f.write(
+                "model\tdataset\taccuracy\tprecision\trecall\tf1\t"
+                "tp\tfp\tfn\ttn\ttotal_files\n"
+            )
+            f.write(
+                f"{model_name}\t{dataset_name}\t"
+                f"{file_metrics['accuracy']:.4f}\t"
+                f"{file_metrics['precision']:.4f}\t"
+                f"{file_metrics['recall']:.4f}\t"
+                f"{file_metrics['f1']:.4f}\t"
+                f"{cm['tp']}\t{cm['fp']}\t{cm['fn']}\t{cm['tn']}\t"
+                f"{file_metrics['total_files']}\n"
+            )
+        logger.info("File-level metrics saved to %s", file_metrics_file)
 
     @staticmethod
     def log_results(model: str, results: dict, dataset: str):
@@ -611,15 +687,6 @@ def main():
             model, grouped_inputs, config.BATCH_SIZE
         )
 
-        # Aggregate file-level safety
-        file_level_results = FileLevelAggregator.aggregate(results)
-        ResultsHandler.save_file_level_results(
-            file_level_results,
-            args.base_model,
-            args.dataset_path,
-            args.output_dir,
-        )
-
         # Find optimal threshold or use specified threshold
         threshold_results = None
         if args.find_optimal:
@@ -632,8 +699,8 @@ def main():
             metrics = MetricsCalculator.compute_metrics(results, threshold=threshold)
             logger.info(f"\nUsing specified threshold: {threshold:.3f}")
 
-        # Log results
-        logger.info("\nFinal Metrics:")
+        # Log per-sample metrics
+        logger.info("\nPer-Sample Metrics:")
         for k, v in metrics.items():
             if isinstance(v, dict):
                 logger.info(f"{k}:")
@@ -641,6 +708,21 @@ def main():
                     logger.info(f"  {sk}: {sv}")
             else:
                 logger.info(f"{k}: {v}")
+
+        # Aggregate file-level safety (after threshold)
+        file_level_results = FileLevelAggregator.aggregate(
+            results, metrics["threshold"]
+        )
+        file_metrics = FileLevelAggregator.compute_file_metrics(file_level_results)
+
+        logger.info("\nFile-Level Metrics:")
+        for k, v in file_metrics.items():
+            if isinstance(v, dict):
+                logger.info(f"  {k}:")
+                for sk, sv in v.items():
+                    logger.info(f"    {sk}: {sv}")
+            else:
+                logger.info(f"  {k}: {v}")
 
         # Save results
         ResultsHandler.save_results(
@@ -650,6 +732,13 @@ def main():
             args.dataset_path,
             args.output_dir,
             threshold_results,
+        )
+        ResultsHandler.save_file_level_results(
+            file_level_results,
+            file_metrics,
+            args.base_model,
+            args.dataset_path,
+            args.output_dir,
         )
         ResultsHandler.log_results(
             model=args.base_model,
