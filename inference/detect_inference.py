@@ -105,15 +105,12 @@ class DataProcessor:
                 dataset = "ReposVul"
             elif "realworld" in dataset_path:
                 dataset = "RealWorld"
-            entry = {
+            entry = {**item}
+            entry.update({
                 "text": f"{system_prompt}\n\n## Instruction:\n{instruction}\n## Input:\n{item['input']}\n## Response:\n",
                 "label": label,
                 "dataset": dataset,
-                "cwe": item.get("cwe", "N/A"),
-                "file_name": item.get("file_name", "N/A"),
-                "project": item.get("project", "N/A"),
-                "code": item.get("code", ""),
-            }
+            })
             processed_data.append(entry)
 
         random.shuffle(processed_data)
@@ -254,20 +251,15 @@ class InferenceEngine:
                     )
 
                     result = {
+                        k: v for k, v in item.items() if k != "text"
+                    }
+                    result.update({
                         "processed_at": processed_at,
-                        "code": item["text"]
-                        .split("\n## Input:\n")[-1]
-                        .replace("\n## Response:\n", ""),
                         "prediction": pred_int,
-                        "label": item["label"],
-                        "dataset": item["dataset"],
-                        "cwe": item["cwe"],
-                        "file_name": item["file_name"],
-                        "project": item["project"],
                         "confidence": confidence,
                         "probabilities": prob.cpu().tolist(),
                         "probability_vulnerable": float(prob[1].cpu()),
-                    }
+                    })
                     all_results.append(result)
 
         InferenceEngine._log_statistics(prediction_counts, confidence_stats)
@@ -471,16 +463,7 @@ class ResultsHandler:
         )
         with jsonlines.open(predictions_file, mode="w") as writer:
             for result in results:
-                writer.write(
-                    {
-                        "code": result["code"],
-                        "prediction": 1
-                        if result["probability_vulnerable"] >= metrics["threshold"]
-                        else 0,
-                        "label": result["label"],
-                        "probability_vulnerable": result["probability_vulnerable"],
-                    }
-                )
+                writer.write(result)
 
         # Save metrics to TSV
         metrics_file = os.path.join(output_dir, f"{base_filename}_metrics.tsv")
