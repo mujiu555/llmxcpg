@@ -111,8 +111,16 @@ def build_dataset(results_dir: str, dataset_name: str = "LLMxCPG") -> list[dict]
         base_name = os.path.basename(entry.get("file_name", "unknown.c"))
         path_idx = entry.get("path_idx", 0)
 
+        # Extract index from entry or details
+        sample_index = entry.get("index") or entry.get("details", {}).get("index")
+        if sample_index is None:
+            sample_index = entry.get("transformation_idx", 0)
+
         # When a source file has multiple paths, suffix the filename.
         name, ext = os.path.splitext(base_name)
+        # Ensure index prefix in the file name
+        if not name.startswith(f"{sample_index}_"):
+            name = f"{sample_index}_{name}"
         unique_name = f"{name}_path{path_idx}{ext}"
 
         # Deduplicate by (file_name, path_idx) — the same original file/path
@@ -128,6 +136,7 @@ def build_dataset(results_dir: str, dataset_name: str = "LLMxCPG") -> list[dict]
         cwe = entry.get("cwe") or entry.get("details", {}).get("cwe", "") or "N/A"
 
         dataset.append({
+            "index": sample_index,
             "instruction": INSTRUCTION,
             "input": code.strip(),
             "output": label,

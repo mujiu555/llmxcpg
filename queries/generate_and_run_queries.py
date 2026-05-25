@@ -172,12 +172,15 @@ class DatasetProcessor:
 
                 try:
                     self._log_sample_message(logging.INFO, f"Starting processing.")
-                    file_name = sample.get("file_name", "").split("/")[-1]
-                    if not file_name:
+                    file_basename = sample.get("file_name", "").split("/")[-1]
+                    if not file_basename:
                          raise ValueError("Could not extract a valid file_name from sample['file_name']")
 
+                    sample_index = sample.get("index", i)
+                    file_name = f"{sample_index}_{file_basename}"
+
                     # Process this sample
-                    result = self._process_single_sample(sample, file_name)
+                    result = self._process_single_sample(sample, file_name, sample_index)
                     if result:
                         active_joern_project = file_name # Mark project as potentially loaded
                         self._write_processed_sample(result)
@@ -220,13 +223,14 @@ class DatasetProcessor:
             loop.close()
 
 
-    def _process_single_sample(self, sample: Dict, file_name: str) -> Dict | None:
+    def _process_single_sample(self, sample: Dict, file_name: str, sample_index: int) -> Dict | None:
         """
         Process a single sample using Joern and LLM.
 
         Args:
             sample: The sample dictionary to process.
-            file_name: The extracted filename for Joern operations.
+            file_name: The extracted filename for Joern operations (with index prefix).
+            sample_index: The index of this sample in the dataset.
 
         Returns:
             The processed sample result as a dictionary, or None if processing failed.
@@ -285,7 +289,8 @@ class DatasetProcessor:
 
             # --- Create result dictionary ---
             sample_result = {
-                "file_name": sample["file_name"],
+                "index": sample_index,
+                "file_name": file_name,
                 "llm_model_type": self.llm_model_type,
                 "llm_queries": generated_queries,
                 "label": sample["label"],

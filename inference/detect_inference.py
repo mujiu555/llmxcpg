@@ -82,7 +82,7 @@ class DataProcessor:
             system_prompt = f.read()
 
         processed_data = []
-        for item in data:
+        for i, item in enumerate(data):
             instruction = item["instruction"].replace(
                 "Single word: VULNERABLE or BENIGN",
                 "Single word: Yes (if code is VULNERABLE) or No (if code is BENIGN)",
@@ -105,12 +105,23 @@ class DataProcessor:
                 dataset = "ReposVul"
             elif "realworld" in dataset_path:
                 dataset = "RealWorld"
+
+            sample_index = item.get("index", i)
+
             entry = {**item}
             entry.update({
                 "text": f"{system_prompt}\n\n## Instruction:\n{instruction}\n## Input:\n{item['input']}\n## Response:\n",
                 "label": label,
                 "dataset": dataset,
+                "index": sample_index,
             })
+
+            # Embed index in file_name if present
+            fn = entry.get("file_name", "")
+            if fn:
+                base = os.path.basename(fn)
+                if not base.startswith(f"{sample_index}_"):
+                    entry["file_name"] = fn.replace(base, f"{sample_index}_{base}")
             processed_data.append(entry)
 
         random.shuffle(processed_data)

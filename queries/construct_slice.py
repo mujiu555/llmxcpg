@@ -104,7 +104,7 @@ class SliceConstructor:
                         return
                     self.logger.info("Joern server recreated successfully.")
 
-                self._process_sample(sample)
+                self._process_sample(sample, i)
 
             self.logger.info("Completed processing all assigned samples")
 
@@ -118,20 +118,28 @@ class SliceConstructor:
                 loop.stop()
             loop.close()
 
-    def _process_sample(self, sample: Dict):
+    def _process_sample(self, sample: Dict, pos_index: int = 0):
         """
         Process a single code sample through the full pipeline.
 
         Args:
             sample: The code sample to process.
+            pos_index: Positional index in the dataset, used as fallback.
         """
         self.current_sample = sample["file_name"]
 
         try:
             self.logger.info(f"Processing sample: {sample['file_name']}")
 
-            # Extract filename from path
+            # Extract index from sample or details
+            sample_index = sample.get("index") or sample.get("details", {}).get("index")
+            if sample_index is None:
+                sample_index = sample.get("transformation_idx", pos_index)
+
+            # Extract filename from path, ensure index prefix
             file_name = os.path.basename(sample["file_name"])
+            if not file_name.startswith(f"{sample_index}_"):
+                file_name = f"{sample_index}_{file_name}"
 
             # Resolve code and queries from the sample.
             # The output of generate_and_run_queries.py nests 'code' inside
@@ -173,7 +181,7 @@ class SliceConstructor:
             self.logger.info(f"Processing {len(paths_to_process)} paths out of {num_flows} detected")
             
             # Process each path to create enhanced code snippets
-            processed_results = self._process_paths(sample, paths_to_process)
+            processed_results = self._process_paths(sample, paths_to_process, sample_index, file_name)
             
             if processed_results:
                 self.logger.info(f"Successfully processed {len(processed_results)} paths")
@@ -191,14 +199,16 @@ class SliceConstructor:
             self.logger.exception(f"Error processing sample: {e}")
             self._write_error_logs(f"Error processing sample: {str(e)}")
 
-    def _process_paths(self, sample: Dict, paths: List) -> List[Dict]:
+    def _process_paths(self, sample: Dict, paths: List, sample_index: int, file_name: str) -> List[Dict]:
         """
         Process extracted paths to create enhanced code snippets.
-        
+
         Args:
             sample: The original sample data.
             paths: The extracted paths from Joern.
-            
+            sample_index: The index of this sample in the dataset.
+            file_name: The indexed filename for Joern operations.
+
         Returns:
             List of processed results including enhanced code snippets.
         """
@@ -230,10 +240,10 @@ class SliceConstructor:
                 context_lines = get_context(path_line_numbers, blocks)
                 
                 # Create enhanced code file path
-                base_name = os.path.basename(sample["file_name"])
+                base_name = os.path.basename(file_name)
                 enhanced_file_path = os.path.join(
-                    self.enhanced_dir, 
-                    f"{base_name}_path{path_idx}_enhanced.c"
+                    self.enhanced_dir,
+                    f"{os.path.splitext(base_name)[0]}_path{path_idx}_enhanced.c"
                 )
                 
                 # Save the enhanced code to file and get the enhanced code as a string
@@ -241,10 +251,11 @@ class SliceConstructor:
                 
                 # Create the result entry
                 result = {
+                    "index": sample_index,
                     "dataset": sample.get("dataset", "unknown"),
                     "transformation_idx": sample.get("transformation_idx", 0),
                     "original_file_name": sample.get("original_file_name", ""),
-                    "file_name": sample.get("file_name", ""),
+                    "file_name": file_name,
                     "queries": sample.get("queries") or sample.get("llm_queries", []),
                     "path_idx": path_idx,
                     "cwe": sample.get("cwe") or sample.get("details", {}).get("cwe", ""),
